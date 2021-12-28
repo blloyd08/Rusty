@@ -1,14 +1,16 @@
 use std::collections::LinkedList;
 use rand::{Rng};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let size = 10;
     let mut game = Game::new(size, size);
     
-    let game_over_reason = game.start();
+    let game_over_reason = game.start().await;
     match game_over_reason {
         GameOverReason::CollideWithSelf => println!("Game Over: You collided with your own body"),
-        GameOverReason::OutOfBounds => println!("Game Over: You went out of bounds")
+        GameOverReason::OutOfBounds => println!("Game Over: You went out of bounds"),
+        GameOverReason::Winner => println!("You Win!")
     }
     println!("Score: {}", game.rusty.body.len());
     
@@ -31,9 +33,10 @@ impl Game {
         }
     }
 
-    pub fn start(&mut self) -> GameOverReason {
+    pub async fn start(&mut self) -> GameOverReason {
+        let total_spaces: usize = (self.width * self.height).try_into().unwrap();
         loop {
-            match self.tick() {
+            match self.tick(total_spaces).await {
                 Some(game_over_reason) => return game_over_reason,
                 None => {}
             }
@@ -41,13 +44,18 @@ impl Game {
         
     }
 
-    fn tick(&mut self) -> Option<GameOverReason> {
+    async fn tick(&mut self, max_spaces: usize) -> Option<GameOverReason> {
 
-        let direction = self.get_direction();
+        let direction = Direction::North;
 
         // move rusty, rusty will grow if it overlaps with food
         let did_grow = self.rusty.move_in_direction(direction, self.food);
         
+        // Check if the player has won
+        if self.rusty.body.len() == max_spaces {
+            return Some(GameOverReason::Winner);
+        }
+
         // Check out of bounds
         let head_position = self.rusty.head();
         if head_position.x < 0 || head_position.y < 0 ||
@@ -62,16 +70,12 @@ impl Game {
         }
         
         if did_grow {
-            self.generate_new_food();
+            self.generate_new_food().await;
         }
         None
     }
 
-    fn get_direction(&self) -> Direction {
-        Direction::North
-    }
-
-    fn generate_new_food(&mut self) {
+    async fn generate_new_food(&mut self) {
         // Pick a new food position at random that doesn't overlap rusty
         let mut rand_x = rand::thread_rng().gen_range(0..self.width);
         let mut rand_y = rand::thread_rng().gen_range(0..self.height);
@@ -97,7 +101,9 @@ impl Game {
 
 enum GameOverReason {
     OutOfBounds,
-    CollideWithSelf
+    CollideWithSelf,
+    // Rusty has filled every available space
+    Winner,
 }
 
 struct Rusty {
@@ -117,6 +123,10 @@ impl Rusty {
         }
     }
 
+    /// Moves the body in the specified direction. If the new head position doesn't
+    /// overlap with food, the tail is removed (doesn't grow).
+    /// 
+    /// Returns true if the new head position overlaps with the food position.
     pub fn move_in_direction(&mut self, direction: Direction, food: Point) -> bool {
         self.direction = direction;
         let new_point = self.head().add_direction(&self.direction);
