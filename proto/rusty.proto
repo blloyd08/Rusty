@@ -1,0 +1,102 @@
+// Copyright 2015 gRPC authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "io.grpc.rusty";
+option java_outer_classname = "Rusty";
+
+package rusty;
+
+service Rusty {
+  // Create a new Rusty game
+  rpc Create (CreateRequest) returns (CreateReply) {}
+
+  rpc Join (JoinRequest) returns (JoinReply) {}
+  
+  rpc Start (StartRequest) returns (StartReply) {}
+
+  rpc Update (UpdateRequest) returns (UpdateReply) {}
+
+  rpc GameStatus (GameStatusRequest) returns (GameStatusReply) {}
+}
+
+// The request message containing the user's name.
+message CreateRequest {
+  uint32 height = 1;
+  uint32 width = 2;
+  uint32 tick_duration_millis = 3;
+}
+
+// The response message containing the game id
+message CreateReply {
+  string game_id = 1;
+}
+
+message JoinRequest {
+  string game_id = 1;
+}
+
+message JoinReply {
+  string user_id = 1;
+  uint32 height = 2;
+  uint32 width = 3;
+}
+
+message StartRequest {
+  string game_id = 1;
+  string user_id = 2;
+}
+
+message StartReply {
+}
+
+message UpdateRequest {
+  string game_id = 1;
+  string user_id = 2;
+  MoveDirection move_direction = 3;
+}
+
+message UpdateReply {
+  GameState game_state = 1;
+}
+
+message GameStatusRequest {
+  string game_id = 1;
+  string user_id = 2;
+}
+
+message GameStatusReply {
+  GameState game_state = 1;
+}
+
+message GameState {
+  uint32 number_of_players = 1;
+  Point food = 2;
+  repeated Point body = 3;
+  MoveDirection move_direction = 4;
+}
+
+message Point {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+enum MoveDirection {
+  North = 0;
+  East = 1;
+  South = 2;
+  West = 3;
+}
