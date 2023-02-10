@@ -1,6 +1,6 @@
 use log::{info, warn};
-use std::{sync::Arc, sync::Weak};
 use std::time::Duration;
+use std::{sync::Arc, sync::Weak};
 
 use tokio::{
     sync::{
@@ -14,26 +14,18 @@ use uuid::Uuid;
 
 use crate::{
     game::{Game, SharedGame},
-    output::print_world,
-    proto::CreateRequest,
     types::Direction,
     GameState, Responder,
 };
+use crate::{GameError, JoinGameReply};
 
 pub(crate) struct GameTask {
     _manager: JoinHandle<()>,
     sender: Arc<Sender<GameCommand>>,
 }
 
-#[derive(Debug)]
-pub struct JoinGameReplyInternal {
-    pub user_id: String,
-    pub width: u32,
-    pub height: u32,
-}
-
 impl GameTask {
-    pub fn new(request: CreateRequest) -> Self {
+    pub fn new(width: i32, height: i32, tick_duration_millis: u64) -> Self {
         let (tx, mut rx) = mpsc::channel::<GameCommand>(32);
         let sender = Arc::new(tx);
         let weak_game_sender = Arc::downgrade(&sender);
@@ -41,10 +33,7 @@ impl GameTask {
         // The `move` keyword is used to **move** ownership of `rx` into the task.
         let _manager = tokio::spawn(async move {
             let game_sender = weak_game_sender;
-            let height: i32 = request.height.try_into().unwrap();
-            let width: i32 = request.width.try_into().unwrap();
             let max_spaces: usize = (width * height).try_into().unwrap();
-            let tick_duration_millis: u64 = request.tick_duration_millis.try_into().unwrap();
             let shared_game = Arc::new(Mutex::new(Game::new(height, width)));
             let mut _tick_handle = None;
             // Start receiving messages
@@ -52,33 +41,53 @@ impl GameTask {
                 use GameCommand::*;
 
                 match cmd {
-                    GameStatus { request } => {
-                        GameTask::game_status(request, shared_game.clone()).await;
+                    GameStatus {
+                        reply_sender,
+                        user_id,
+                    } => {
+                        GameTask::game_status(reply_sender, user_id, shared_game.clone()).await;
                     }
-                    UpdateGame { request } => {
-                        GameTask::update_game(request, shared_game.clone()).await;
+                    UpdateGame {
+                        reply_sender,
+                        user_id,
+                        direction,
+                    } => {
+                        GameTask::update_game(
+                            reply_sender,
+                            user_id,
+                            direction,
+                            shared_game.clone(),
+                        )
+                        .await;
                     }
-                    JoinGame { request } => {
-                        GameTask::join_game(request, shared_game.clone()).await;
+                    JoinGame { reply_sender } => {
+                        GameTask::join_game(reply_sender, shared_game.clone()).await;
                     }
-                    StartGame { request } => {
-                        match GameTask::start_game(
-                            request,
+                    StartGame {
+                        reply_sender,
+                        user_id,
+                    } => {
+                        let reply = match GameTask::start_game(
+                            user_id,
                             shared_game.clone(),
                             tick_duration_millis,
                             game_sender.clone(),
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok(tick_handle) => {
                                 _tick_handle = Some(tick_handle);
-                            },
-                            Err(_) => {}
-                        }
+                                None
+                            }
+                            Err(err) => Some(err),
+                        };
+                        reply_sender
+                            .send(reply)
+                            .expect("Start Game response should succeed");
                     }
                     Tick {} => {
-                        println!("Tick received");
                         let game_state = GameTask::tick(shared_game.clone(), max_spaces).await;
                         let game_over = game_state.game_over_reason.is_some();
-                        print_world(&game_state);
                         if game_over {
                             break;
                         }
@@ -88,64 +97,72 @@ impl GameTask {
             warn!("Exiting game loop");
         });
 
-        Self {
-            _manager,
-            sender,
-        }
+        Self { _manager, sender }
     }
 
     pub async fn send_command(&self, command: GameCommand) {
         if let Err(error) = self.sender.send(command).await {
-            print!("{}", error);
-            todo!();
+            print!("Send game command failed due to error: {}", error);
         }
     }
 
-    async fn game_status(request: GameStatusInternalRequest, shared_game: SharedGame) {
-        // TODO: Verify user has joined
+    async fn game_status(
+        reply_sender: Responder<Result<GameState, GameError>>,
+        user_id: String,
+        shared_game: SharedGame,
+    ) {
         let game = shared_game.lock().await;
-        let game_state = game.into_game_state().await;
-
-        // Ignore errors
-        let _ = request.resp.send(game_state);
+        if game.user_has_joined_game(user_id).await {
+            let _ = reply_sender.send(Ok(game.into_game_state().await));
+        } else {
+            let _ = reply_sender.send(Err(GameError::InvalidUser));
+        }
     }
 
-    async fn update_game(request: UpdateGameRequest, shared_game: SharedGame) {
-        // TODO: Verify user has registered
+    async fn update_game(
+        reply_sender: Responder<Result<GameState, GameError>>,
+        user_id: String,
+        direction: Direction,
+        shared_game: SharedGame,
+    ) {
         let game = shared_game.lock().await;
-        game.add_user_direction(request.user_id, request.direction)
-            .await;
+        if !game.user_has_joined_game(user_id.clone()).await {
+            let _ = reply_sender.send(Err(GameError::InvalidUser));
+            return;
+        }
+        game.add_user_direction(user_id, direction).await;
 
         let game_state = game.into_game_state().await;
-        // Ignore errors
-        let _ = request.resp.send(game_state);
+        let _ = reply_sender.send(Ok(game_state));
     }
 
-    async fn join_game(request: JoinGameRequest, shared_game: SharedGame) {
+    async fn join_game(
+        join_game_reply_receiver: Responder<JoinGameReply>,
+        shared_game: SharedGame,
+    ) {
         let user_id = Uuid::new_v4().to_string();
         let game = shared_game.lock().await;
         let _user_is_added = game.add_user(user_id.clone()).await;
         let (width, height) = game.get_dimensions();
 
         // Ignore errors
-        let _ = request.resp.send(JoinGameReplyInternal {
+        let _ = join_game_reply_receiver.send(JoinGameReply {
             user_id,
-            width,
-            height
+            width: width as i32,
+            height: height as i32,
         });
     }
 
     async fn start_game(
-        request: StartGameRequest,
+        user_id: String,
         shared_game: SharedGame,
         tick_duration_millis: u64,
         command_sender: Weak<Sender<GameCommand>>,
-    ) -> Result<JoinHandle<()>, String> {
+    ) -> Result<JoinHandle<()>, GameError> {
         let game = shared_game.lock().await;
-        if game.user_has_joined_game(request.user_id).await {
+        if game.user_has_joined_game(user_id).await {
             let _tick = tokio::spawn(async move {
-                let mut interval =
-                    time::interval(Duration::from_millis(tick_duration_millis));
+                let mut interval = time::interval(Duration::from_millis(tick_duration_millis));
                 loop {
                     interval.tick().await;
                     if let Some(tick_sender) = command_sender.upgrade() {
@@ -154,7 +171,7 @@ impl GameTask {
                             Err(_) => {
                                 warn!("Failed to send tick. Channel Closed");
                                 break;
-                            },
+                            }
                         }
                     } else {
                         warn!("Command sender dropped. Exiting tick loop");
@@ -164,7 +181,7 @@ impl GameTask {
             });
             return Ok(_tick);
         }
-        Err("Must join game before starting game".to_owned())
+        Err(GameError::InvalidUser)
     }
 
     async fn tick(shared_game: SharedGame, max_spaces: usize) -> GameState {
@@ -174,76 +191,35 @@ impl GameTask {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct UpdateGameRequest {
-    user_id: String,
-    direction: Direction,
-    resp: Responder<GameState>,
-}
-
-impl UpdateGameRequest {
-    pub fn new(user_id: String, direction: Direction, resp: Responder<GameState>) -> Self {
-        Self {
-            user_id,
-            direction,
-            resp,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct GameStatusInternalRequest {
-    user_id: String,
-    resp: Responder<GameState>,
-}
-
-impl GameStatusInternalRequest {
-    pub fn new(user_id: String, resp: Responder<GameState>) -> Self {
-        Self { user_id, resp }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct JoinGameRequest {
-    resp: Responder<JoinGameReplyInternal>,
-}
-
-impl JoinGameRequest {
-    pub fn new(resp: Responder<JoinGameReplyInternal>) -> Self {
-        Self { resp }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct StartGameRequest {
-    user_id: String,
-    resp: Responder<String>,
-}
-
-impl StartGameRequest {
-    pub fn new(user_id: String, resp: Responder<String>) -> Self {
-        Self { user_id, resp }
-    }
-}
-
 pub(crate) enum GameCommand {
-    UpdateGame { request: UpdateGameRequest },
-    GameStatus { request: GameStatusInternalRequest },
-    JoinGame { request: JoinGameRequest },
-    StartGame { request: StartGameRequest },
+    UpdateGame {
+        reply_sender: Responder<Result<GameState, GameError>>,
+        user_id: String,
+        direction: Direction,
+    },
+    GameStatus {
+        reply_sender: Responder<Result<GameState, GameError>>,
+        user_id: String,
+    },
+    JoinGame {
+        reply_sender: Responder<JoinGameReply>,
+    },
+    StartGame {
+        reply_sender: Responder<Option<GameError>>,
+        user_id: String,
+    },
     Tick {},
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::game_task::GameState;
     use crate::output::print_world;
-    use crate::proto::CreateRequest;
-    use crate::task::GameState;
     use crate::Point;
     use tokio::sync::oneshot::{self};
 
     use crate::{
-        task::{GameCommand, GameTask, JoinGameRequest, UpdateGameRequest},
+        game_task::{GameCommand, GameTask},
         types::Direction,
     };
 
@@ -266,19 +242,16 @@ mod tests {
         let (resp, resp_rx) = oneshot::channel();
         // Send the create game request
         let cmd = GameCommand::UpdateGame {
-            request: UpdateGameRequest {
-                user_id,
-                direction: Direction::South,
-                resp,
-            },
+            reply_sender: resp,
+            user_id,
+            direction: Direction::South,
         };
 
         game_task.send_command(cmd).await;
 
         // Await the response
         let res = resp_rx.await;
-        println!("GOT = {:?}", res);
-        let game_state = res.unwrap();
+        let game_state = res.unwrap().unwrap();
         const HEIGHT: i32 = 10;
         let expected_game_state = GameState {
             tick: 0,
@@ -302,25 +275,18 @@ mod tests {
     }
 
     fn get_test_game() -> GameTask {
-        GameTask::new(CreateRequest {
-            height: 10,
-            width: 10,
-            tick_duration_millis: 1000,
-        })
+        GameTask::new(10, 10, 1000)
     }
 
     async fn join_game(game_task: &GameTask) -> String {
         let (resp, resp_rx) = oneshot::channel();
         // Send the create game request
-        let cmd = GameCommand::JoinGame {
-            request: JoinGameRequest { resp },
-        };
+        let cmd = GameCommand::JoinGame { reply_sender: resp };
 
         game_task.send_command(cmd).await;
 
         // Await the response
         let res = resp_rx.await;
-        println!("Join Game Response = {:?}", res);
         let response = res.unwrap();
         response.user_id
     }

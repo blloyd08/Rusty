@@ -5,9 +5,3 @@ pub enum Direction {
     East,
     West,
 }
-
-#[derive(Debug)]
-pub(crate) enum GameError {
-    InvalidUser,
-    InvalidGame,
-}

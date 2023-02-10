@@ -48,21 +48,21 @@ impl Game {
         (self.width as u32, self.height as u32)
     }
 
-    pub async fn add_user(&self, user_id: String) -> bool {
+    pub(crate) async fn add_user(&self, user_id: String) -> bool {
         self.users.lock().await.insert(user_id)
     }
 
-    pub async fn user_has_joined_game(&self, user_id: String) -> bool {
+    pub(crate) async fn user_has_joined_game(&self, user_id: String) -> bool {
         self.users.lock().await.contains(&user_id)
     }
 
-    pub async fn add_user_direction(&self, user_id: String, direction: Direction) {
+    pub(crate) async fn add_user_direction(&self, user_id: String, direction: Direction) {
         self.requested_directions
             .add_direction(&user_id, direction)
             .await
     }
 
-    pub async fn tick(&mut self, max_spaces: usize) -> Option<GameOverReason> {
+    pub(crate) async fn tick(&mut self, max_spaces: usize) -> Option<GameOverReason> {
         self.epoch += 1;
         self.game_state_version += 1;
         // Check if game previously failed
@@ -131,7 +131,7 @@ impl Game {
         )
     }
 
-    pub async fn into_game_state(&self) -> GameState {
+    pub(crate) async fn into_game_state(&self) -> GameState {
         // If there have been no updates to the Game, return the previous GameState
         let cache = &self.game_state_cache;
         if self.game_state_version <= cache.last_returned_game_state_version {
@@ -179,7 +179,7 @@ impl Body {
     /// overlap with food, the tail is removed (doesn't grow).
     ///
     /// Returns true if the new head position overlaps with the food position.
-    pub fn move_in_direction(&mut self, direction: Direction, food: Point) -> bool {
+    pub(crate) fn move_in_direction(&mut self, direction: Direction, food: Point) -> bool {
         self.direction = direction;
         let new_point = self.head().add_direction(&self.direction);
         self.body.push_front(new_point);
@@ -193,11 +193,11 @@ impl Body {
         food_overlaps
     }
 
-    pub fn head(&self) -> Point {
+    pub(crate) fn head(&self) -> Point {
         self.body.front().expect("Body should not be empty").clone()
     }
 
-    pub fn is_collide_with_self(&self) -> bool {
+    pub(crate) fn is_collide_with_self(&self) -> bool {
         let mut iterator = self.body.iter();
         let head_node = iterator.next().unwrap();
 
@@ -210,7 +210,7 @@ impl Body {
         false
     }
 
-    pub fn body(&self) -> Vec<Point> {
+    pub(crate) fn body(&self) -> Vec<Point> {
         Vec::from(self.body.clone())
     }
 }

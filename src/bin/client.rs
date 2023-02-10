@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use rusty::rusty_client::RustyClient;
 use rusty::{
-    CreateRequest, GameState as ProtoGameState, GameStatusRequest, JoinRequest, StartRequest,
-    Point as ProtoPoint, UpdateRequest,
+    CreateRequest, GameState as ProtoGameState, GameStatusRequest, JoinRequest,
+    Point as ProtoPoint, StartRequest, UpdateRequest,
 };
 use rusty_game::output::print_world;
-use rusty_game::proto::{MoveDirection};
+use rusty_game::proto::MoveDirection;
 use rusty_game::{GameState, Point};
 use tokio::task::JoinHandle;
 use tokio::time;
@@ -52,12 +52,15 @@ impl From<ProtoPoint> for Point {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Creating Game");
     let game_id = create_game().await;
+    println!("Joining Game");
     let user_id = join_game(game_id.clone()).await;
-    join_game(game_id.clone()).await;
+    println!("Starting Game");
     start_game(game_id.clone(), user_id.clone()).await;
+    println!("Spawning Tick");
     let _tick_handle = spawn_ticker(game_id.clone(), user_id.clone());
-    
+
     while let Ok(direction) = get_user_direction() {
         let result = update_game(game_id.clone(), user_id.clone(), direction).await;
         print_world(&result.unwrap().into());
@@ -68,14 +71,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn spawn_ticker(game_id: String, user_id: String) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval =
-            time::interval(Duration::from_millis(100));
-        
+        let mut interval = time::interval(Duration::from_millis(100));
+
         loop {
             interval.tick().await;
             match game_status(game_id.clone(), user_id.clone()).await {
                 Ok(game_state) => print_world(&game_state.into()),
-                Err(_) => break,
+                Err(err) => {
+                    println!("Tick exiting due to error: {}", err);
+                    break;
+                }
             }
         }
     })

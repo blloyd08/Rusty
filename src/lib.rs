@@ -1,15 +1,82 @@
+use game_manager::GameManager;
 use tokio::sync::oneshot;
 use types::Direction;
 
 mod game;
+mod game_manager;
+mod game_task;
 pub mod output;
 mod requested_direction;
 pub mod service;
-mod task;
 mod types;
 
 pub mod proto {
     tonic::include_proto!("rusty");
+}
+
+pub struct RustyGame {
+    manager: GameManager,
+}
+
+impl Default for RustyGame {
+    fn default() -> Self {
+        Self {
+            manager: GameManager::new(),
+        }
+    }
+}
+
+impl RustyGame {
+    pub fn new() -> Self {
+        RustyGame {
+            manager: GameManager::new(),
+        }
+    }
+
+    pub async fn create_game(&self, width: i32, height: i32, tick_duration_millis: u64) -> String {
+        self.manager
+            .create_game(width, height, tick_duration_millis)
+            .await
+    }
+
+    pub async fn join_game(&self, game_id: String) -> Result<JoinGameReply, GameError> {
+        self.manager.join_game(game_id).await
+    }
+
+    pub async fn start_game(&self, game_id: String, user_id: String) -> Result<(), GameError> {
+        self.manager.start_game(game_id, user_id).await
+    }
+
+    pub async fn game_status(
+        &self,
+        game_id: String,
+        user_id: String,
+    ) -> Result<GameState, GameError> {
+        self.manager.game_status(game_id, user_id).await
+    }
+
+    pub async fn update_game(
+        &self,
+        game_id: String,
+        user_id: String,
+        direction: Direction,
+    ) -> Result<GameState, GameError> {
+        self.manager.update_game(game_id, user_id, direction).await
+    }
+}
+
+#[derive(Debug)]
+pub struct JoinGameReply {
+    pub user_id: String,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug)]
+pub enum GameError {
+    InvalidUser,
+    InvalidGame,
+    Internal,
 }
 
 impl From<Direction> for proto::MoveDirection {
@@ -53,21 +120,6 @@ impl From<Point> for proto::Point {
         }
     }
 }
-
-// #[tokio::main]
-// async fn main() {
-//     let size = 10;
-//     let mut game = Game::new(size, size);
-
-//     let game_over_reason = game.start().await;
-//     match game_over_reason {
-//         GameOverReason::CollideWithSelf => println!("Game Over: You collided with your own body"),
-//         GameOverReason::OutOfBounds => println!("Game Over: You went out of bounds"),
-//         GameOverReason::Winner => println!("You Win!")
-//     }
-//     println!("Score: {}", game.rusty.body.len());
-
-// }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Point {

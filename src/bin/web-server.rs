@@ -1,10 +1,11 @@
 // cargo run --bin web-server
-#[macro_use] extern crate rocket;
+#[macro_use]
+extern crate rocket;
 use std::time::Duration;
 
+use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Header;
 use rocket::{Request, Response};
-use rocket::fairing::{Fairing, Info, Kind};
 use rusty::rusty_client::RustyClient;
 use rusty::{
     CreateRequest, GameState as ProtoGameState, GameStatusRequest, JoinRequest, StartRequest,
@@ -19,8 +20,6 @@ pub mod rusty {
     tonic::include_proto!("rusty");
 }
 
-
-
 pub struct CORS;
 
 #[rocket::async_trait]
@@ -28,19 +27,20 @@ impl Fairing for CORS {
     fn info(&self) -> Info {
         Info {
             name: "Add CORS headers to responses",
-            kind: Kind::Response
+            kind: Kind::Response,
         }
     }
 
     async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
         response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Methods", "POST, GET, PATCH, OPTIONS"));
+        response.set_header(Header::new(
+            "Access-Control-Allow-Methods",
+            "POST, GET, PATCH, OPTIONS",
+        ));
         response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
         response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
     }
 }
-
-
 
 #[get("/")]
 fn index() -> &'static str {
@@ -72,7 +72,8 @@ async fn start(game_id: &str, user_id: &str) -> String {
 #[get("/update/<game_id>/<user_id>/<direction>")]
 async fn update(game_id: &str, user_id: &str, direction: u32) -> String {
     if direction > 3 {
-        return "Direction should be a number from 0 to 3.\n0=North, 1=East, 2=South, 3=West".to_string();
+        return "Direction should be a number from 0 to 3.\n0=North, 1=East, 2=South, 3=West"
+            .to_string();
     }
 
     let selected_direction = match direction {
@@ -82,11 +83,8 @@ async fn update(game_id: &str, user_id: &str, direction: u32) -> String {
         _ => MoveDirection::West,
     };
 
-    let game_state_response = update_game(
-        game_id.to_string(),
-        user_id.to_string(),
-        selected_direction
-    ).await;
+    let game_state_response =
+        update_game(game_id.to_string(), user_id.to_string(), selected_direction).await;
     let response = format!("{:?}", game_state_response);
     let json_response = json!({
         "error": game_state_response.is_err(),
@@ -97,45 +95,33 @@ async fn update(game_id: &str, user_id: &str, direction: u32) -> String {
 
 #[get("/status/<game_id>/<user_id>")]
 async fn status(game_id: &str, user_id: &str) -> String {
-    let game_state_response = game_status(
-        game_id.to_string(),
-        user_id.to_string(),
-    ).await;
+    let game_state_response = game_status(game_id.to_string(), user_id.to_string()).await;
     match game_state_response {
-        Ok(game_state) => {
-            json!({
-                "error": false,
-                "response": game_state
-            }).to_string()
-        }
-        Err(err) => {
-            json!({
-                "error": true,
-                "response": err.to_string()
-            }).to_string()
-        }
+        Ok(game_state) => json!({
+            "error": false,
+            "response": game_state
+        })
+        .to_string(),
+        Err(err) => json!({
+            "error": true,
+            "response": err.to_string()
+        })
+        .to_string(),
     }
 }
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
     let _rocket = rocket::build()
-        .mount("/", routes![
-            index,
-            delay,
-            create,
-            join,
-            status,
-            update,
-            start,
-        ])
+        .mount(
+            "/",
+            routes![index, delay, create, join, status, update, start,],
+        )
         .attach(CORS)
         .launch()
         .await?;
     Ok(())
 }
-
-
 
 async fn create_game(height: u32, width: u32, tick: u32) -> String {
     let mut client = RustyClient::connect("http://[::1]:50051").await.unwrap();
