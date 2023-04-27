@@ -2,10 +2,6 @@ use crate::GameState;
 use crate::{requested_direction::RequestedDirection, types::Direction, GameOverReason, Point};
 use rand::Rng;
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
-pub(crate) type SharedGame = Arc<Mutex<Game>>;
 
 struct GameStateCache {
     last_returned_game_state_version: usize,
@@ -20,7 +16,7 @@ pub(crate) struct Game {
     game_over: Option<GameOverReason>,
     epoch: usize,
     requested_directions: RequestedDirection,
-    users: Mutex<HashSet<String>>,
+    users: HashSet<String>,
     game_state_version: usize,
     game_state_cache: GameStateCache,
 }
@@ -34,7 +30,7 @@ impl Game {
             rusty: Body::new(height / 2),
             game_over: None,
             epoch: 0,
-            users: Mutex::new(HashSet::new()),
+            users: HashSet::new(),
             requested_directions: RequestedDirection::new(),
             game_state_version: 1,
             game_state_cache: GameStateCache {
@@ -48,15 +44,15 @@ impl Game {
         (self.width as u32, self.height as u32)
     }
 
-    pub(crate) async fn add_user(&self, user_id: String) -> bool {
-        self.users.lock().await.insert(user_id)
+    pub(crate) async fn add_user(&mut self, user_id: String) -> bool {
+        self.users.insert(user_id)
     }
 
     pub(crate) async fn user_has_joined_game(&self, user_id: String) -> bool {
-        self.users.lock().await.contains(&user_id)
+        self.users.contains(&user_id)
     }
 
-    pub(crate) async fn add_user_direction(&self, user_id: String, direction: Direction) {
+    pub(crate) async fn add_user_direction(&mut self, user_id: String, direction: Direction) {
         self.requested_directions
             .add_direction(&user_id, direction)
             .await
@@ -75,6 +71,8 @@ impl Game {
             Some(user_selected_direction) => user_selected_direction,
             None => self.rusty.direction,
         };
+        // Flush all previous direction inputs
+        self.requested_directions.clear().await;
 
         // move rusty, rusty will grow if it overlaps with food
         let did_grow = self.rusty.move_in_direction(direction, self.food);

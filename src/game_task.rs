@@ -3,20 +3,13 @@ use std::time::Duration;
 use std::{sync::Arc, sync::Weak};
 
 use tokio::{
-    sync::{
-        mpsc::{self, Sender},
-        Mutex,
-    },
+    sync::mpsc::{self, Sender},
     task::JoinHandle,
     time::{self},
 };
 use uuid::Uuid;
 
-use crate::{
-    game::{Game, SharedGame},
-    types::Direction,
-    GameState, Responder,
-};
+use crate::{game::Game, types::Direction, GameState, Responder};
 use crate::{GameError, JoinGameReply};
 
 pub(crate) struct GameTask {
@@ -34,7 +27,7 @@ impl GameTask {
         let _manager = tokio::spawn(async move {
             let game_sender = weak_game_sender;
             let max_spaces: usize = (width * height).try_into().unwrap();
-            let shared_game = Arc::new(Mutex::new(Game::new(height, width)));
+            let mut game = Game::new(height, width);
             let mut _tick_handle = None;
             // Start receiving messages
             while let Some(cmd) = rx.recv().await {
@@ -45,23 +38,17 @@ impl GameTask {
                         reply_sender,
                         user_id,
                     } => {
-                        GameTask::game_status(reply_sender, user_id, shared_game.clone()).await;
+                        GameTask::game_status(reply_sender, user_id, &mut game).await;
                     }
                     UpdateGame {
                         reply_sender,
                         user_id,
                         direction,
                     } => {
-                        GameTask::update_game(
-                            reply_sender,
-                            user_id,
-                            direction,
-                            shared_game.clone(),
-                        )
-                        .await;
+                        GameTask::update_game(reply_sender, user_id, direction, &mut game).await;
                     }
                     JoinGame { reply_sender } => {
-                        GameTask::join_game(reply_sender, shared_game.clone()).await;
+                        GameTask::join_game(reply_sender, &mut game).await;
                     }
                     StartGame {
                         reply_sender,
@@ -69,7 +56,7 @@ impl GameTask {
                     } => {
                         let reply = match GameTask::start_game(
                             user_id,
-                            shared_game.clone(),
+                            &mut game,
                             tick_duration_millis,
                             game_sender.clone(),
                         )
@@ -86,7 +73,7 @@ impl GameTask {
                             .expect("Start Game response should succeed");
                     }
                     Tick {} => {
-                        let game_state = GameTask::tick(shared_game.clone(), max_spaces).await;
+                        let game_state = GameTask::tick(&mut game, max_spaces).await;
                         let game_over = game_state.game_over_reason.is_some();
                         if game_over {
                             break;
@@ -109,9 +96,8 @@ impl GameTask {
     async fn game_status(
         reply_sender: Responder<Result<GameState, GameError>>,
         user_id: String,
-        shared_game: SharedGame,
+        game: &mut Game,
     ) {
-        let game = shared_game.lock().await;
         if game.user_has_joined_game(user_id).await {
             let _ = reply_sender.send(Ok(game.into_game_state().await));
         } else {
@@ -123,9 +109,8 @@ impl GameTask {
         reply_sender: Responder<Result<GameState, GameError>>,
         user_id: String,
         direction: Direction,
-        shared_game: SharedGame,
+        game: &mut Game,
     ) {
-        let game = shared_game.lock().await;
         if !game.user_has_joined_game(user_id.clone()).await {
             let _ = reply_sender.send(Err(GameError::InvalidUser));
             return;
@@ -136,12 +121,8 @@ impl GameTask {
         let _ = reply_sender.send(Ok(game_state));
     }
 
-    async fn join_game(
-        join_game_reply_receiver: Responder<JoinGameReply>,
-        shared_game: SharedGame,
-    ) {
+    async fn join_game(join_game_reply_receiver: Responder<JoinGameReply>, game: &mut Game) {
         let user_id = Uuid::new_v4().to_string();
-        let game = shared_game.lock().await;
         let _user_is_added = game.add_user(user_id.clone()).await;
         let (width, height) = game.get_dimensions();
 
@@ -155,14 +136,15 @@ impl GameTask {
 
     async fn start_game(
         user_id: String,
-        shared_game: SharedGame,
+        game: &mut Game,
         tick_duration_millis: u64,
         command_sender: Weak<Sender<GameCommand>>,
     ) -> Result<JoinHandle<()>, GameError> {
-        let game = shared_game.lock().await;
         if game.user_has_joined_game(user_id).await {
             let _tick = tokio::spawn(async move {
                 let mut interval = time::interval(Duration::from_millis(tick_duration_millis));
+                // Sleep On initial start to allow users time to react after starting game
+                tokio::time::sleep(Duration::from_secs(3)).await;
                 loop {
                     interval.tick().await;
                     if let Some(tick_sender) = command_sender.upgrade() {
@@ -184,8 +166,7 @@ impl GameTask {
         Err(GameError::InvalidUser)
     }
 
-    async fn tick(shared_game: SharedGame, max_spaces: usize) -> GameState {
-        let mut game = shared_game.lock().await;
+    async fn tick(game: &mut Game, max_spaces: usize) -> GameState {
         game.tick(max_spaces).await;
         game.into_game_state().await
     }

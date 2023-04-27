@@ -1,35 +1,31 @@
 use std::collections::HashMap;
 
 use crate::types::Direction;
-use tokio::sync::Mutex;
 
 pub(crate) struct RequestedDirection {
-    directions: Mutex<HashMap<String, Direction>>,
+    directions: HashMap<String, Direction>,
 }
 
 impl RequestedDirection {
     pub fn new() -> Self {
         Self {
-            directions: Mutex::new(HashMap::new()),
+            directions: HashMap::new(),
         }
     }
 
-    pub async fn add_direction(&self, user_id: &str, direction: Direction) {
+    pub async fn add_direction(&mut self, user_id: &str, direction: Direction) {
         self.directions
-            .lock()
-            .await
             .insert(user_id.to_string(), direction);
     }
 
-    pub async fn clear(&self) {
-        self.directions.lock().await.clear();
+    pub async fn clear(&mut self) {
+        self.directions.clear();
     }
 
     pub async fn calculate_direction(&self) -> Option<Direction> {
-        let directions_guard = self.directions.lock().await;
         let mut directions_count: HashMap<Direction, usize> = HashMap::new();
 
-        for (_, direction) in &*directions_guard {
+        for (_, direction) in &self.directions {
             *directions_count.entry(*direction).or_insert(1) += 1;
         }
 
@@ -40,7 +36,7 @@ impl RequestedDirection {
     }
 
     pub async fn len(&self) -> usize {
-        self.directions.lock().await.len()
+        self.directions.len()
     }
 }
 
@@ -50,7 +46,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_direction() {
-        let requested_direction = RequestedDirection::new();
+        let mut requested_direction = RequestedDirection::new();
         let user_id = "test_user_id";
 
         // Add direction
@@ -64,13 +60,13 @@ mod tests {
 
     #[tokio::test]
     async fn clear() {
-        let requested_direction = RequestedDirection::new();
+        let mut requested_direction = RequestedDirection::new();
         requested_direction.clear().await;
     }
 
     #[tokio::test]
     async fn max_direction_selected() {
-        let requested_direction = RequestedDirection::new();
+        let mut requested_direction = RequestedDirection::new();
 
         let users = generate_user_ids(10);
         let majority_index = (users.len() / 2) + 1;
@@ -91,7 +87,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_counted_once() {
-        let requested_direction = RequestedDirection::new();
+        let mut requested_direction = RequestedDirection::new();
 
         let south_user_1 = "user_south";
         let north_user_1 = "north_user_1";

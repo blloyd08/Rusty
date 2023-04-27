@@ -9,7 +9,7 @@ use crate::{
     GameError, GameState, JoinGameReply,
 };
 pub(crate) struct GameManager {
-    games: Arc<Mutex<HashMap<String, GameTask>>>,
+    games: Arc<Mutex<HashMap<String, Arc<Mutex<GameTask>>>>>,
 }
 
 impl Default for GameManager {
@@ -27,6 +27,11 @@ impl GameManager {
         }
     }
 
+    async fn get_game(&self, game_id: &String) -> Option<Arc<Mutex<GameTask>>> {
+        let map = self.games.lock().await;
+        map.get(game_id).map(|g| g.clone())
+    }
+
     pub(crate) async fn create_game(
         &self,
         width: i32,
@@ -37,14 +42,15 @@ impl GameManager {
         let game_id = Uuid::new_v4().to_string();
         println!("Creating game {}", game_id);
         let mut games = self.games.lock().await;
-        games.insert(game_id.clone(), game);
+        games.insert(game_id.clone(), Arc::new(Mutex::new(game)));
         game_id
     }
 
     pub(crate) async fn join_game(&self, game_id: String) -> Result<JoinGameReply, GameError> {
-        match self.games.lock().await.get(&game_id) {
+        match self.get_game(&game_id).await {
             None => Err(GameError::InvalidGame),
             Some(game) => {
+                let game = game.lock().await;
                 let (resp_tx, resp_rx) = oneshot::channel();
 
                 let cmd = GameCommand::JoinGame {
@@ -75,6 +81,7 @@ impl GameManager {
         match self.games.lock().await.get(&game_id) {
             None => Err(GameError::InvalidGame),
             Some(game) => {
+                let game = game.lock().await;
                 println!("User {} is starting game {}", user_id, game_id);
                 let (resp_tx, resp_rx) = oneshot::channel();
                 let cmd = GameCommand::StartGame {
@@ -108,6 +115,7 @@ impl GameManager {
         match games.get(&game_id) {
             None => Err(GameError::InvalidGame),
             Some(game) => {
+                let game = game.lock().await;
                 let (resp_tx, resp_rx) = oneshot::channel();
 
                 let cmd = GameCommand::UpdateGame {
@@ -138,6 +146,7 @@ impl GameManager {
         match games.get(&game_id) {
             None => Err(GameError::InvalidGame),
             Some(game) => {
+                let game = game.lock().await;
                 let (resp_tx, resp_rx) = oneshot::channel();
 
                 let cmd = GameCommand::GameStatus {
